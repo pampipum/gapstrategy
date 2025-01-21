@@ -52,6 +52,7 @@ async def scan_market():
 @app.get("/")
 async def root():
     """Root endpoint with API information."""
+    last_scan_time = cache['last_scan'].isoformat() if cache['last_scan'] else None
     return {
         "name": "Gap Strategy API",
         "version": "1.0",
@@ -59,7 +60,9 @@ async def root():
             "gaps": "/api/gaps",
             "health": "/api/health"
         },
-        "status": "running"
+        "status": "running",
+        "last_scan": last_scan_time,
+        "scanning": cache['scanning']
     }
 
 @app.get("/api/gaps")
@@ -85,11 +88,18 @@ async def get_gaps():
 
 @app.get("/api/health")
 async def health_check():
+    """Health check endpoint."""
+    time_since_last_scan = None
+    if cache['last_scan']:
+        time_since_last_scan = int((datetime.now() - cache['last_scan']).total_seconds())
+
     return {
         "status": "healthy",
         "last_scan": cache['last_scan'].isoformat() if cache['last_scan'] else None,
         "scanning": cache['scanning'],
-        "cached_results_available": cache['results'] is not None
+        "cached_results_available": cache['results'] is not None,
+        "results_count": len(cache['results']) if cache['results'] else 0,
+        "seconds_since_last_scan": time_since_last_scan
     }
 
 async def background_scanner():
