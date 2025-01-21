@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from gap_scanner import GapScanner
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 import logging
 
@@ -11,12 +11,12 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+app = FastAPI(title="Gap Strategy API")
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["https://gapstrategy.vercel.app", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,26 +29,10 @@ cache = {
     'scanning': False
 }
 
-def is_market_hours():
-    et_tz = pytz.timezone('US/Eastern')
-    now = datetime.now(et_tz)
-    
-    # Check if it's a weekday
-    if now.weekday() >= 5:  # 5 = Saturday, 6 = Sunday
-        return False
-    
-    # Convert current time to minutes since midnight
-    current_time = now.hour * 60 + now.minute
-    market_open = 9 * 60 + 30  # 9:30 AM
-    market_close = 16 * 60  # 4:00 PM
-    
-    return market_open <= current_time <= market_close
-
 async def scan_market():
-    """Run market scan and update cache."""
     if cache['scanning']:
         return
-    
+        
     try:
         cache['scanning'] = True
         scanner = GapScanner(min_gap_percent=0.5, lookback_days=30)
@@ -65,13 +49,18 @@ async def scan_market():
     finally:
         cache['scanning'] = False
 
-@app.on_event("startup")
-async def startup_event():
-    """Initial scan when server starts."""
-    try:
-        await scan_market()
-    except Exception as e:
-        logger.error(f"Initial scan failed: {str(e)}")
+@app.get("/")
+async def root():
+    """Root endpoint with API information."""
+    return {
+        "name": "Gap Strategy API",
+        "version": "1.0",
+        "endpoints": {
+            "gaps": "/api/gaps",
+            "health": "/api/health"
+        },
+        "status": "running"
+    }
 
 @app.get("/api/gaps")
 async def get_gaps():
@@ -80,16 +69,17 @@ async def get_gaps():
         try:
             await scan_market()
         except Exception as e:
+            logger.error(f"Initial scan failed: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
     
-    # If we have data but it's old (> 5 min during market hours)
-    elif is_market_hours():
+    # If we have data but it's old (> 5 min)
+    else:
         time_since_last_scan = (datetime.now() - cache['last_scan']).total_seconds() if cache['last_scan'] else float('inf')
         if time_since_last_scan > 300:  # 5 minutes
             try:
                 asyncio.create_task(scan_market())  # Non-blocking scan
-            except Exception:
-                logger.error("Background scan failed")
+            except Exception as e:
+                logger.error(f"Background scan failed: {str(e)}")
     
     return cache['results'] or []
 
@@ -99,20 +89,18 @@ async def health_check():
         "status": "healthy",
         "last_scan": cache['last_scan'].isoformat() if cache['last_scan'] else None,
         "scanning": cache['scanning'],
-        "cached_results_available": cache['results'] is not None,
-        "market_hours": is_market_hours()
+        "cached_results_available": cache['results'] is not None
     }
 
 async def background_scanner():
-    """Background task to periodically scan market during trading hours."""
+    """Background task to periodically scan market."""
     while True:
-        if is_market_hours():
-            try:
-                await scan_market()
-            except Exception as e:
-                logger.error(f"Background scan failed: {str(e)}")
+        try:
+            await scan_market()
+        except Exception as e:
+            logger.error(f"Background scan failed: {str(e)}")
         
-        await asyncio.sleep(300)  # Wait 5 minutes before next scan
+        await asyncio.sleep(300)  # Wait 5 minutes
 
 @app.on_event("startup")
 async def start_background_tasks():
