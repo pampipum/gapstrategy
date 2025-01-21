@@ -16,17 +16,35 @@ function App() {
     try {
       setLoading(true);
       setError(null);
-      const response = await fetch(`${API_URL}/api/gaps`);
+      
+      console.log('Fetching from:', `${API_URL}/api/gaps`); // Debug log
+      
+      const response = await fetch(`${API_URL}/api/gaps`, {
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        }
+      });
       
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to fetch gaps');
+        const errorText = await response.text();
+        console.error('API Error:', errorText); // Debug log
+        let errorMessage;
+        try {
+          const errorData = JSON.parse(errorText);
+          errorMessage = errorData.detail || 'Failed to fetch gaps';
+        } catch {
+          errorMessage = `Server error: ${response.status}`;
+        }
+        throw new Error(errorMessage);
       }
       
       const data = await response.json();
+      console.log('Received data:', data); // Debug log
       setGaps(data);
       setLastUpdate(new Date());
     } catch (err) {
+      console.error('Fetch error:', err); // Debug log
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setLoading(false);
@@ -34,6 +52,7 @@ function App() {
   };
 
   useEffect(() => {
+    console.log('Using API URL:', API_URL); // Debug log
     fetchGaps();
     const intervalId = setInterval(fetchGaps, 5 * 60 * 1000);
     return () => clearInterval(intervalId);
@@ -44,16 +63,26 @@ function App() {
       <div className="max-w-7xl mx-auto">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-3xl font-bold text-gray-900">Stock Gap Scanner</h1>
-          {lastUpdate && (
-            <div className="text-sm text-gray-500">
-              Last updated: {lastUpdate.toLocaleTimeString()}
-            </div>
-          )}
+          <div className="text-sm text-gray-500">
+            {lastUpdate ? (
+              `Last updated: ${lastUpdate.toLocaleTimeString()}`
+            ) : (
+              loading ? 'Updating...' : 'Never updated'
+            )}
+          </div>
         </div>
 
         {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
             {error}
+            <br />
+            <span className="text-sm">API URL: {API_URL}</span>
+          </div>
+        )}
+
+        {loading && !gaps.length && (
+          <div className="flex justify-center items-center py-12">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
           </div>
         )}
 

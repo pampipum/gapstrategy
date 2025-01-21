@@ -1,6 +1,6 @@
 import yfinance as yf
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import concurrent.futures
 import time
 import sys
@@ -44,6 +44,13 @@ class GapScanner:
             }
         return info_dict
 
+    def _get_market_cap(self, symbol):
+        try:
+            ticker = yf.Ticker(symbol)
+            return ticker.info.get('marketCap', 0)
+        except:
+            return 0
+
     def _download_batch_data(self, symbols):
         try:
             old_stdout = sys.stdout
@@ -51,9 +58,14 @@ class GapScanner:
             sys.stdout = io.StringIO()
             sys.stderr = io.StringIO()
             
+            # Calculate the start date (last business day)
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=5)  # Get a few days to ensure we have the last session
+            
             data = yf.download(
                 symbols,
-                period=f"{self.lookback_days}d",
+                start=start_date,
+                end=end_date,
                 interval="1d",
                 group_by='ticker',
                 auto_adjust=True,
@@ -66,7 +78,8 @@ class GapScanner:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             return data
-        except Exception:
+        except Exception as e:
+            print(f"Error downloading data: {e}")
             return None
 
     def identify_gaps(self, symbol, data):
@@ -79,45 +92,53 @@ class GapScanner:
             if len(df) < 2:
                 return None
             
-            gaps = []
-            for i in range(1, len(df)):
-                prev_day_high = df['High'].iloc[i-1]
-                prev_day_low = df['Low'].iloc[i-1]
-                current_open = df['Open'].iloc[i]
-                current_date = df.index[i].strftime('%Y-%m-%d')
-                current_price = df['Close'].iloc[i]
-                volume = df['Volume'].iloc[i]
-                
-                gap_up = current_open > prev_day_high
-                gap_down = current_open < prev_day_low
-                
-                if gap_up:
-                    gap_size = ((current_open - prev_day_high) / prev_day_high) * 100
-                    gap_type = 'up'
-                elif gap_down:
-                    gap_size = ((prev_day_low - current_open) / prev_day_low) * 100
-                    gap_type = 'down'
-                else:
-                    continue
-                    
-                if abs(gap_size) >= self.min_gap_percent:
-                    company_info = self.company_info.get(symbol, {'name': symbol, 'sector': 'Unknown'})
-                    gaps.append({
-                        'symbol': symbol,
-                        'companyName': company_info['name'],
-                        'sector': company_info['sector'],
-                        'date': current_date,
-                        'gap_type': gap_type,
-                        'gap_size': round(gap_size, 2),
-                        'prev_high': round(prev_day_high, 2),
-                        'prev_low': round(prev_day_low, 2),
-                        'current_open': round(current_open, 2),
-                        'price': round(current_price, 2),
-                        'volume': int(volume)
-                    })
+            # Get only the last two sessions
+            df = df.tail(2)
             
-            return gaps
-        except Exception:
+            prev_day_high = df['High'].iloc[0]
+            prev_day_low = df['Low'].iloc[0]
+            current_open = df['Open'].iloc[1]
+            current_date = df.index[1].strftime('%Y-%m-%d')
+            current_price = df['Close'].iloc[1]
+            volume = df['Volume'].iloc[1]
+            avg_volume = df['Volume'].mean()
+            
+            gap_up = current_open > prev_day_high
+            gap_down = current_open < prev_day_low
+            
+            if gap_up:
+                gap_size = ((current_open - prev_day_high) / prev_day_high) * 100
+                gap_type = 'up'
+            elif gap_down:
+                gap_size = ((prev_day_low - current_open) / prev_day_low) * 100
+                gap_type = 'down'
+            else:
+                return None
+                    
+            if abs(gap_size) >= self.min_gap_percent:
+                company_info = self.company_info.get(symbol, {'name': symbol, 'sector': 'Unknown'})
+                market_cap = self._get_market_cap(symbol)
+                
+                return {
+                    'symbol': symbol,
+                    'companyName': company_info['name'],
+                    'sector': company_info['sector'],
+                    'date': current_date,
+                    'gap_type': gap_type,
+                    'gap_size': round(gap_size, 2),
+                    'prev_high': round(prev_day_high, 2),
+                    'prev_low': round(prev_day_low, 2),
+                    'current_open': round(current_open, 2),
+                    'price': round(current_price, 2),
+                    'volume': int(volume),
+                    'avg_volume': int(avg_volume),
+                    'market_cap': market_cap,
+                    'relative_volume': round(volume/avg_volume, 2) if avg_volume > 0 else 0
+                }
+            
+            return None
+        except Exception as e:
+            print(f"Error processing {symbol}: {e}")
             return None
 
     def process_batch(self, symbols):
@@ -127,9 +148,9 @@ class GapScanner:
         
         results = []
         for symbol in symbols:
-            gaps = self.identify_gaps(symbol, data)
-            if gaps:
-                results.extend(gaps)
+            gap = self.identify_gaps(symbol, data)
+            if gap:
+                results.append(gap)
         return results
 
     def scan_market(self, batch_size=20):
@@ -153,5 +174,9 @@ class GapScanner:
                 processed += batch_size
                 print(f"Scanning: {min(processed, total_symbols)}/{total_symbols}", end='\r')
 
-        print(" " * 50, end='\r')
-        return pd.DataFrame(gap_data)
+        # Convert to DataFrame, sort by market cap and get top 10
+        df = pd.DataFrame(gap_data)
+        if not df.empty:
+            df = df.sort_values('market_cap', ascending=False).head(10)
+            
+        return df

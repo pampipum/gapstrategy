@@ -13,8 +13,32 @@ interface SortConfig {
 
 function GapTable({ gaps, loading }: GapTableProps) {
   const [sortedGaps, setSortedGaps] = useState<Gap[]>([]);
-  const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'date', direction: 'desc' });
+  const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'market_cap', direction: 'desc' });
   const [filter, setFilter] = useState('');
+
+  // Format market cap as B or M
+  const formatMarketCap = (marketCap: number | undefined) => {
+    if (!marketCap) return 'N/A';
+    if (marketCap >= 1e9) {
+      return `$${(marketCap / 1e9).toFixed(1)}B`;
+    }
+    return `$${(marketCap / 1e6).toFixed(1)}M`;
+  };
+
+  // Format volume with K, M, B
+  const formatVolume = (volume: number | undefined) => {
+    if (!volume) return 'N/A';
+    if (volume >= 1e9) {
+      return `${(volume / 1e9).toFixed(1)}B`;
+    }
+    if (volume >= 1e6) {
+      return `${(volume / 1e6).toFixed(1)}M`;
+    }
+    if (volume >= 1e3) {
+      return `${(volume / 1e3).toFixed(1)}K`;
+    }
+    return volume.toString();
+  };
 
   useEffect(() => {
     let filtered = [...gaps];
@@ -56,7 +80,7 @@ function GapTable({ gaps, loading }: GapTableProps) {
     });
   };
 
-  if (loading) {
+  if (loading && !sortedGaps.length) {
     return (
       <div className="flex justify-center items-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
@@ -85,30 +109,42 @@ function GapTable({ gaps, loading }: GapTableProps) {
             <tr>
               <th
                 onClick={() => handleSort('date')}
-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
               >
                 Date ↕
               </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Symbol & Company
               </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Sector
               </th>
               <th
+                onClick={() => handleSort('market_cap')}
+                className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              >
+                Market Cap ↕
+              </th>
+              <th
                 onClick={() => handleSort('gap_size')}
-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
               >
                 Gap % ↕
               </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Price
-              </th>
               <th
                 onClick={() => handleSort('volume')}
-                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
               >
                 Volume ↕
+              </th>
+              <th
+                onClick={() => handleSort('relative_volume')}
+                className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+              >
+                Rel Vol ↕
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Price
               </th>
             </tr>
           </thead>
@@ -118,10 +154,10 @@ function GapTable({ gaps, loading }: GapTableProps) {
                 key={`${gap.symbol}-${gap.date}-${index}`}
                 className="hover:bg-gray-50"
               >
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
                   {new Date(gap.date).toLocaleDateString()}
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap">
+                <td className="px-4 py-4 whitespace-nowrap">
                   <div className="flex flex-col">
                     <div className="text-sm font-medium text-gray-900">
                       {gap.symbol}
@@ -131,19 +167,25 @@ function GapTable({ gaps, loading }: GapTableProps) {
                     </div>
                   </div>
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
                   {gap.sector}
                 </td>
-                <td className={`px-6 py-4 whitespace-nowrap text-sm font-medium ${
+                <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                  {formatMarketCap(gap.market_cap)}
+                </td>
+                <td className={`px-4 py-4 whitespace-nowrap text-sm font-medium ${
                   gap.gap_type === 'up' ? 'text-green-600' : 'text-red-600'
                 }`}>
                   {gap.gap_type === 'up' ? '+' : '-'}{Math.abs(gap.gap_size)}%
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  ${gap.price?.toFixed(2)}
+                <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                  {formatVolume(gap.volume)}
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  {gap.volume?.toLocaleString()}
+                <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                  {gap.relative_volume?.toFixed(1)}x
+                </td>
+                <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-900">
+                  ${gap.price?.toFixed(2)}
                 </td>
               </tr>
             ))}
