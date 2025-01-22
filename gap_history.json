@@ -1,0 +1,50 @@
+[
+  {
+    "symbol": "AAPL",
+    "companyName": "Apple Inc.",
+    "sector": "Information Technology",
+    "date": "2025-01-22",
+    "gap_type": "up",
+    "gap_size": 2.5,
+    "price": 185.25,
+    "volume": 15000000,
+    "avg_volume": 12000000,
+    "relative_volume": 1.25,
+    "market_cap": 3000000000000,
+    "prev_high": 182.50,
+    "prev_low": 180.75,
+    "current_open": 184.50
+  },
+  {
+    "symbol": "MSFT",
+    "companyName": "Microsoft Corporation",
+    "sector": "Information Technology",
+    "date": "2025-01-21",
+    "gap_type": "down",
+    "gap_size": -1.8,
+    "price": 375.50,
+    "volume": 22000000,
+    "avg_volume": 20000000,
+    "relative_volume": 1.1,
+    "market_cap": 2800000000000,
+    "prev_high": 380.25,
+    "prev_low": 377.50,
+    "current_open": 376.25
+  },
+  {
+    "symbol": "GOOGL",
+    "companyName": "Alphabet Inc.",
+    "sector": "Communication Services",
+    "date": "2025-01-20",
+    "gap_type": "up",
+    "gap_size": 3.2,
+    "price": 142.75,
+    "volume": 18000000,
+    "avg_volume": 15000000,
+    "relative_volume": 1.2,
+    "market_cap": 1800000000000,
+    "prev_high": 138.50,
+    "prev_low": 137.25,
+    "current_open": 141.50
+  }
+]

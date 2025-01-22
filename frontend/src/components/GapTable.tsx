@@ -16,7 +16,6 @@ function GapTable({ gaps, loading }: GapTableProps) {
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'market_cap', direction: 'desc' });
   const [filter, setFilter] = useState('');
 
-  // Format market cap as B or M
   const formatMarketCap = (marketCap: number | undefined) => {
     if (!marketCap) return 'N/A';
     if (marketCap >= 1e9) {
@@ -25,7 +24,6 @@ function GapTable({ gaps, loading }: GapTableProps) {
     return `$${(marketCap / 1e6).toFixed(1)}M`;
   };
 
-  // Format volume with K, M, B
   const formatVolume = (volume: number | undefined) => {
     if (!volume) return 'N/A';
     if (volume >= 1e9) {
@@ -82,28 +80,77 @@ function GapTable({ gaps, loading }: GapTableProps) {
 
   if (loading && !sortedGaps.length) {
     return (
-      <div className="flex justify-center items-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      <div className="flex justify-center items-center h-32 md:h-64">
+        <div className="animate-spin rounded-full h-8 w-8 md:h-12 md:w-12 border-b-2 border-blue-600"></div>
       </div>
     );
   }
 
+  // Priority columns for mobile
+  const renderMobileCard = (gap: Gap) => (
+    <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 space-y-2">
+      <div className="flex justify-between items-start">
+        <div>
+          <div className="font-medium text-gray-900">{gap.symbol}</div>
+          <div className="text-sm text-gray-500">{gap.companyName}</div>
+        </div>
+        <div className={`text-right font-medium ${
+          gap.gap_type === 'up' ? 'text-green-600' : 'text-red-600'
+        }`}>
+          {gap.gap_type === 'up' ? '+' : '-'}{Math.abs(gap.gap_size)}%
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-sm">
+        <div>
+          <span className="text-gray-500">Market Cap:</span>{' '}
+          <span className="font-medium">{formatMarketCap(gap.market_cap)}</span>
+        </div>
+        <div>
+          <span className="text-gray-500">Price:</span>{' '}
+          <span className="font-medium">${gap.price?.toFixed(2)}</span>
+        </div>
+        <div>
+          <span className="text-gray-500">Volume:</span>{' '}
+          <span className="font-medium">{formatVolume(gap.volume)}</span>
+        </div>
+        <div>
+          <span className="text-gray-500">Rel Vol:</span>{' '}
+          <span className="font-medium">{gap.relative_volume?.toFixed(1)}x</span>
+        </div>
+      </div>
+      <div className="text-xs text-gray-500 flex justify-between">
+        <span>{gap.sector}</span>
+        <span>{new Date(gap.date).toLocaleDateString()}</span>
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
         <input
           type="text"
           placeholder="Filter by symbol, company, or sector..."
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          className="px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full sm:w-auto px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
         />
         <div className="text-sm text-gray-600">
           Found {sortedGaps.length} gaps
         </div>
       </div>
       
-      <div className="overflow-x-auto rounded-lg border border-gray-200">
+      {/* Mobile View */}
+      <div className="block md:hidden space-y-3">
+        {sortedGaps.map((gap, index) => (
+          <div key={`${gap.symbol}-${gap.date}-${index}`}>
+            {renderMobileCard(gap)}
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop View */}
+      <div className="hidden md:block overflow-x-auto rounded-lg border border-gray-200">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>

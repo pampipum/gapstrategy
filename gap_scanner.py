@@ -5,6 +5,7 @@ import concurrent.futures
 import time
 import sys
 import io
+import pytz
 
 class GapScanner:
     def __init__(self, min_gap_percent=0.5, lookback_days=30):
@@ -47,6 +48,7 @@ class GapScanner:
     def _get_market_cap(self, symbol):
         try:
             ticker = yf.Ticker(symbol)
+            time.sleep(0.1)  # Add small delay to avoid rate limiting
             return ticker.info.get('marketCap', 0)
         except:
             return 0
@@ -58,21 +60,24 @@ class GapScanner:
             sys.stdout = io.StringIO()
             sys.stderr = io.StringIO()
             
-            # Calculate the start date (last business day)
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=5)  # Get a few days to ensure we have the last session
+            # Get current time in EST
+            est = pytz.timezone('US/Eastern')
+            now = datetime.now(est)
+            
+            # Calculate start date to get last 3 trading days
+            start_date = now - timedelta(days=5)  # Get 5 calendar days to ensure 3 trading days
             
             data = yf.download(
                 symbols,
                 start=start_date,
-                end=end_date,
-                interval="1d",
+                end=now,
+                interval="1m",  # Using 1-minute data to build 12-minute candles
                 group_by='ticker',
                 auto_adjust=True,
                 prepost=True,
-                threads=True,
+                threads=False,  # Disable threading to avoid rate limits
                 progress=False,
-                timeout=5
+                timeout=10
             )
             
             sys.stdout = old_stdout
@@ -89,28 +94,58 @@ class GapScanner:
             else:
                 df = pd.DataFrame(data[symbol]).dropna()
                 
-            if len(df) < 2:
+            if len(df) < 2:  # Need at least 2 days of data
+                return None
+                
+            # Get current time in EST
+            est = pytz.timezone('US/Eastern')
+            now = datetime.now(est)
+            
+            # Only scan between 9:42 and 9:45 AM EST
+            market_open = now.replace(hour=9, minute=42)
+            market_cutoff = now.replace(hour=9, minute=45)
+            if not (market_open <= now <= market_cutoff):
                 return None
             
-            # Get only the last two sessions
-            df = df.tail(2)
+            # Resample to 12-minute candles
+            df_12min = df.resample('12T').agg({
+                'Open': 'first',
+                'High': 'max',
+                'Low': 'min',
+                'Close': 'last',
+                'Volume': 'sum'
+            }).dropna()
             
-            prev_day_high = df['High'].iloc[0]
-            prev_day_low = df['Low'].iloc[0]
-            current_open = df['Open'].iloc[1]
-            current_date = df.index[1].strftime('%Y-%m-%d')
-            current_price = df['Close'].iloc[1]
-            volume = df['Volume'].iloc[1]
-            avg_volume = df['Volume'].mean()
+            # Get today's first 12-min candle
+            today_candle = df_12min[-1:]
+            if len(today_candle) == 0:
+                return None
+                
+            # Get previous day's high/low
+            prev_day = df.resample('D').agg({
+                'High': 'max',
+                'Low': 'min',
+                'Volume': 'sum'
+            }).dropna()
             
-            gap_up = current_open > prev_day_high
-            gap_down = current_open < prev_day_low
+            if len(prev_day) < 2:
+                return None
+                
+            prev_day_high = prev_day['High'].iloc[-2]
+            prev_day_low = prev_day['Low'].iloc[-2]
+            
+            current_open = today_candle['Open'].iloc[0]
+            first_candle_close = today_candle['Close'].iloc[0]
+            
+            # Check for gap conditions
+            gap_up = current_open < prev_day_low and first_candle_close > current_open  # Trap de compra
+            gap_down = current_open > prev_day_high and first_candle_close < current_open  # Trap de venda
             
             if gap_up:
-                gap_size = ((current_open - prev_day_high) / prev_day_high) * 100
+                gap_size = ((prev_day_low - current_open) / prev_day_low) * 100
                 gap_type = 'up'
             elif gap_down:
-                gap_size = ((prev_day_low - current_open) / prev_day_low) * 100
+                gap_size = ((current_open - prev_day_high) / prev_day_high) * 100
                 gap_type = 'down'
             else:
                 return None
@@ -118,18 +153,20 @@ class GapScanner:
             if abs(gap_size) >= self.min_gap_percent:
                 company_info = self.company_info.get(symbol, {'name': symbol, 'sector': 'Unknown'})
                 market_cap = self._get_market_cap(symbol)
+                volume = today_candle['Volume'].iloc[0]
+                avg_volume = df['Volume'].mean()
                 
                 return {
                     'symbol': symbol,
                     'companyName': company_info['name'],
                     'sector': company_info['sector'],
-                    'date': current_date,
+                    'date': now.strftime('%Y-%m-%d'),
                     'gap_type': gap_type,
                     'gap_size': round(gap_size, 2),
                     'prev_high': round(prev_day_high, 2),
                     'prev_low': round(prev_day_low, 2),
                     'current_open': round(current_open, 2),
-                    'price': round(current_price, 2),
+                    'price': round(first_candle_close, 2),
                     'volume': int(volume),
                     'avg_volume': int(avg_volume),
                     'market_cap': market_cap,
@@ -146,6 +183,9 @@ class GapScanner:
         if data is None:
             return []
         
+        # Add delay between batches
+        time.sleep(2)
+        
         results = []
         for symbol in symbols:
             gap = self.identify_gaps(symbol, data)
@@ -153,7 +193,7 @@ class GapScanner:
                 results.append(gap)
         return results
 
-    def scan_market(self, batch_size=20):
+    def scan_market(self, batch_size=10):  # Reduced batch size
         gap_data = []
         total_symbols = len(self.sp500_symbols)
         processed = 0
@@ -163,7 +203,7 @@ class GapScanner:
             for i in range(0, len(self.sp500_symbols), batch_size)
         ]
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:  # Reduced workers
             futures = []
             for batch in symbol_batches:
                 futures.append(executor.submit(self.process_batch, batch))
@@ -174,9 +214,13 @@ class GapScanner:
                 processed += batch_size
                 print(f"Scanning: {min(processed, total_symbols)}/{total_symbols}", end='\r')
 
-        # Convert to DataFrame, sort by market cap and get top 10
+        # Convert to DataFrame and include all data from last 3 days
         df = pd.DataFrame(gap_data)
         if not df.empty:
-            df = df.sort_values('market_cap', ascending=False).head(10)
+            # Sort by date (descending) and gap size (absolute value)
+            df['date'] = pd.to_datetime(df['date'])
+            df = df.sort_values(['date', 'gap_size'], ascending=[False, True])
+            # Keep only last 3 days
+            df = df[df['date'] >= (datetime.now() - timedelta(days=3))]
             
         return df
