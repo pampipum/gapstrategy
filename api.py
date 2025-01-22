@@ -35,7 +35,8 @@ HISTORY_FILE = "gap_history.json"
 cache = {
     'last_scan': None,
     'historical_data': [],
-    'scanning': False
+    'scanning': False,
+    'scan_log': []
 }
 
 def load_historical_data():
@@ -76,49 +77,43 @@ async def scan_market():
         est = pytz.timezone('US/Eastern')
         now = datetime.now(est)
         
-        # Only scan during market hours between 9:42-9:45 AM EST
-        market_open = now.replace(hour=9, minute=42)
-        market_cutoff = now.replace(hour=9, minute=45)
+        logger.info("Starting market scan...")
+        results, scan_log = await loop.run_in_executor(None, scanner.scan_market_with_log)
         
-        logger.info(f"Current time: {now}, Market window: {market_open} - {market_cutoff}")
+        # Store scan log
+        cache['scan_log'] = scan_log
         
-        if market_open <= now <= market_cutoff:
-            logger.info("Starting market scan")
-            results = await loop.run_in_executor(None, scanner.scan_market)
+        if not results.empty:
+            # Convert DataFrame to list of dictionaries
+            new_results = results.to_dict('records')
             
-            if not results.empty:
-                # Convert DataFrame to list of dictionaries
-                new_results = results.to_dict('records')
-                
-                # Add to historical data
-                current_date = now.strftime('%Y-%m-%d')
-                
-                # Remove old data for the current date if it exists
+            # Add to historical data
+            current_date = now.strftime('%Y-%m-%d')
+            
+            # Remove old data for the current date if it exists
+            cache['historical_data'] = [
+                entry for entry in cache['historical_data'] 
+                if entry['date'] != current_date
+            ]
+            
+            # Add new data
+            cache['historical_data'].extend(new_results)
+            
+            # Keep only last 3 days
+            dates = sorted(set(entry['date'] for entry in cache['historical_data']))
+            if len(dates) > 3:
+                keep_dates = dates[-3:]
                 cache['historical_data'] = [
-                    entry for entry in cache['historical_data'] 
-                    if entry['date'] != current_date
+                    entry for entry in cache['historical_data']
+                    if entry['date'] in keep_dates
                 ]
-                
-                # Add new data
-                cache['historical_data'].extend(new_results)
-                
-                # Keep only last 3 days
-                dates = sorted(set(entry['date'] for entry in cache['historical_data']))
-                if len(dates) > 3:
-                    keep_dates = dates[-3:]
-                    cache['historical_data'] = [
-                        entry for entry in cache['historical_data']
-                        if entry['date'] in keep_dates
-                    ]
-                
-                # Save to file
-                save_historical_data(cache['historical_data'])
-                
-                logger.info(f"Market scan completed, found {len(new_results)} gaps")
-            else:
-                logger.info("No gaps found in current scan")
+            
+            # Save to file
+            save_historical_data(cache['historical_data'])
+            
+            logger.info(f"Market scan completed, found {len(new_results)} gaps")
         else:
-            logger.info("Outside of scanning window")
+            logger.info("No gaps found in current scan")
             
         cache['last_scan'] = now
         
@@ -128,39 +123,16 @@ async def scan_market():
     finally:
         cache['scanning'] = False
 
-@app.get("/")
-async def root():
-    """Root endpoint with API information."""
-    last_scan_time = cache['last_scan'].isoformat() if cache['last_scan'] else None
-    return {
-        "name": "Gap Strategy API",
-        "version": "1.0",
-        "endpoints": {
-            "gaps": "/api/gaps",
-            "health": "/api/health"
-        },
-        "status": "running",
-        "last_scan": last_scan_time,
-        "scanning": cache['scanning']
-    }
-
 @app.get("/api/gaps")
 async def get_gaps():
     logger.info(f"Gaps request received. Have {len(cache['historical_data'])} records")
     
-    # If we haven't scanned yet today during market hours, try to scan
-    est = pytz.timezone('US/Eastern')
-    now = datetime.now(est)
-    market_open = now.replace(hour=9, minute=42)
-    market_cutoff = now.replace(hour=9, minute=45)
-    
-    if market_open <= now <= market_cutoff:
-        if not cache['last_scan'] or (now - cache['last_scan']).total_seconds() > 60:
-            try:
-                await scan_market()
-            except Exception as e:
-                logger.error(f"Scan failed: {str(e)}")
-                raise HTTPException(status_code=500, detail=str(e))
+    # Force a new scan on every request for testing
+    try:
+        await scan_market()
+    except Exception as e:
+        logger.error(f"Scan failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
     
     # Return historical data sorted by date (newest first) and gap size
     sorted_data = sorted(
@@ -170,7 +142,11 @@ async def get_gaps():
     )
     
     logger.info(f"Returning {len(sorted_data)} gaps")
-    return sorted_data
+    return {
+        "gaps": sorted_data,
+        "scan_log": cache['scan_log'],
+        "last_scan": cache['last_scan'].isoformat() if cache['last_scan'] else None
+    }
 
 @app.get("/api/health")
 async def health_check():
@@ -182,42 +158,15 @@ async def health_check():
     if cache['last_scan']:
         time_since_last_scan = int((now - cache['last_scan']).total_seconds())
 
-    market_open = now.replace(hour=9, minute=42)
-    market_cutoff = now.replace(hour=9, minute=45)
-    is_scan_window = market_open <= now <= market_cutoff
-
     return {
         "status": "healthy",
         "last_scan": cache['last_scan'].isoformat() if cache['last_scan'] else None,
         "scanning": cache['scanning'],
-        "is_scan_window": is_scan_window,
         "market_time": now.strftime("%H:%M:%S EST"),
         "cached_results_count": len(cache['historical_data']),
         "seconds_since_last_scan": time_since_last_scan,
         "data_dates": list(set(entry['date'] for entry in cache['historical_data']))
     }
-
-async def background_scanner():
-    """Background task to periodically check and scan if in window."""
-    while True:
-        try:
-            est = pytz.timezone('US/Eastern')
-            now = datetime.now(est)
-            market_open = now.replace(hour=9, minute=42)
-            market_cutoff = now.replace(hour=9, minute=45)
-            
-            if market_open <= now <= market_cutoff:
-                logger.info("Background scanner triggering scan")
-                await scan_market()
-            
-        except Exception as e:
-            logger.error(f"Background scan failed: {str(e)}")
-        
-        await asyncio.sleep(60)  # Check every minute
-
-@app.on_event("startup")
-async def start_background_tasks():
-    asyncio.create_task(background_scanner())
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
